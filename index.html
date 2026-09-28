@@ -339,34 +339,102 @@ function openDetail(r){
   };
 }
 
-/* ---------- prompt pour Claude ---------- */
-function buildPrompt(url,raw){return `Tu classes une recette de cuisine pour mon carnet personnel. Réponds UNIQUEMENT par un bloc de code JSON, sans aucun texte avant ou après.
-
-Si tu ne peux pas ouvrir le lien, déduis ce que tu peux de l'URL et surtout du texte fourni. N'invente pas de recette si les indices manquent.
-Tout doit être en français, quelle que soit la langue d'origine : traduis le titre, les mots-clés et les notes.
-Convertis toutes les mesures non métriques en système métrique français :
-- cups, tablespoons, teaspoons, sticks, ounces, pounds → grammes pour les ingrédients secs ou solides, millilitres ou centilitres pour les liquides, selon la densité de chaque ingrédient (1 cup de farine ≈ 125 g, 1 cup de sucre ≈ 200 g, 1 stick de beurre ≈ 113 g, 1 cup de lait ≈ 240 ml) ;
-- tbsp → c. à soupe, tsp → c. à café ;
-- °F → °C arrondi à 5 °C près, avec le thermostat entre parenthèses, par exemple 180 °C (th. 6) ;
-- inches → cm, tailles de moule en cm.
-Arrondis à des valeurs pratiques et utilise les noms français courants des ingrédients (heavy cream → crème liquide entière, all-purpose flour → farine T55, baking soda → bicarbonate).
-
-Repas autorisés (UN seul, exactement ce libellé, ou "") : ${JSON.stringify(state.meals)}
-Occasions autorisées (0 à 3, exactement ces libellés) : ${JSON.stringify(state.occ)}
-
-Format attendu :
-{"title":"titre court","meal":"...","occasions":["..."],"minutes":durée totale en minutes (entier, 0 si inconnue),"keywords":["5 à 8 mots-clés en minuscules"],"notes":"liste des ingrédients (une ligne chacun, quantités métriques) puis étapes numérotées, ou vide si le texte ne donne pas la recette"}
-
-URL : ${url||"(aucune)"}
-Texte :
-${(raw||"").slice(0,12000)||"(aucun)"}`}
-function parseAI(text){
-  let t=String(text||"").trim();const fence=t.match(/```(?:json)?\s*([\s\S]*?)```/);if(fence)t=fence[1];
-  const a=t.indexOf("{"),b=t.lastIndexOf("}");if(a<0||b<=a)throw new Error("json");
-  return JSON.parse(t.slice(a,b+1));
+/* ---------- remplissage automatique (sans IA) ---------- */
+const STOP_TAGS=new Set(["recette","recettes","recipe","recipes","food","foodie","foodporn","instafood","foodstagram","homemade","faitmaison","maison","yummy","cooking","cuisine","delicious","miam","gourmand","gourmandise","reels","reel","fyp","foryou","pourtoi","easyrecipe","recettefacile","recettesimple","instagood","foodlover","foodblogger","food52","eeeeeats","tasty","healthyfood","cuisinemaison"]);
+const INGREDIENTS=["courgette","aubergine","tomate","poivron","carotte","poireau","oignon","ail","échalote","champignon","épinard","brocoli","chou-fleur","chou","potiron","butternut","patate douce","pomme de terre","concombre","avocat","betterave","petits pois","haricot","lentille","pois chiche","quinoa","boulgour","riz","pâtes","spaghetti","gnocchi","semoule","poulet","dinde","bœuf","boeuf","veau","porc","agneau","lardon","jambon","chorizo","saumon","thon","cabillaud","crevette","moule","œuf","oeuf","feta","chèvre","mozzarella","burrata","parmesan","comté","ricotta","mascarpone","gruyère","emmental","crème","yaourt","lait de coco","coco","tofu","chocolat","cacao","vanille","caramel","citron","orange","pomme","poire","banane","fraise","framboise","myrtille","cerise","pêche","abricot","mangue","ananas","noisette","amande","noix","pistache","cacahuète","sésame","miel","sirop d'érable","flocons d'avoine","pâte feuilletée","pâte brisée","basilic","menthe","coriandre","curry","gingembre","cannelle"];
+const EN_FR={chicken:"poulet",beef:"bœuf",pork:"porc",salmon:"saumon",tuna:"thon",shrimp:"crevette",egg:"œuf",eggs:"œuf",zucchini:"courgette",eggplant:"aubergine",tomato:"tomate",tomatoes:"tomate",carrot:"carotte",mushroom:"champignon",mushrooms:"champignon",spinach:"épinard",broccoli:"brocoli",potato:"pomme de terre",potatoes:"pomme de terre","sweet potato":"patate douce",pumpkin:"potiron",chickpeas:"pois chiche",lentils:"lentille",rice:"riz",pasta:"pâtes",cheese:"fromage",chocolate:"chocolat",lemon:"citron",apple:"pomme",banana:"banane",strawberry:"fraise",strawberries:"fraise",raspberry:"framboise",blueberries:"myrtille",honey:"miel",oats:"flocons d'avoine",peanut:"cacahuète",almond:"amande",almonds:"amande",coconut:"coco",garlic:"ail",onion:"oignon",avocado:"avocat",ginger:"gingembre",cinnamon:"cannelle",vanilla:"vanille"};
+const DIET=[[/\bvegan|végétalien|plant.?based/i,"vegan"],[/végétarien|vegetarian|veggie/i,"végétarien"],[/sans gluten|gluten.?free/i,"sans gluten"],[/sans lactose|dairy.?free/i,"sans lactose"]];
+const MEAL_RULES=[
+ ["Boisson",/smoothie|cocktail|mocktail|limonade|lemonade|milkshake|jus de|latte|chocolat chaud|hot chocolate|thé glacé|iced tea|sangria|spritz/i],
+ ["Petit-déjeuner",/petit[- ]d[ée]j|breakfast|brunch|granola|porridge|overnight oats|pancake|p[âa]te à tartiner|muesli|bowlcake|tartine/i],
+ ["Apéro",/ap[ée]ro|ap[ée]ritif|dip\b|houmous|hummus|tapenade|guacamole|tzatziki|rillettes|feuillet[ée]s? apéro|gressins|toast|bouchées|appetizer|finger food|verrine/i],
+ ["Goûter",/go[ûu]ter|cookie|muffin|brownie|cake\b|banana bread|madeleine|financier|cr[êe]pe|gaufre|waffle|scone|cinnamon roll|brioche/i],
+ ["Snack",/snack|energy ball|boule d'énergie|barre de céréales|granola bar|chips|pop.?corn|en-cas/i],
+ ["Dessert",/dessert|tarte au|tarte aux (pommes|fraises|poires|citron|framboises|abricots)|mousse au chocolat|tiramisu|cheesecake|fondant|panna cotta|crème brûlée|flan|clafoutis|crumble|fraisier|pavlova|glace|sorbet|entremets|gâteau|cake au chocolat|pudding/i],
+ ["Entrée",/entr[ée]e|starter|velout[ée]|soupe|soup|gaspacho|carpaccio|tartare|salade|salad|terrine/i],
+ ["Accompagnement",/accompagnement|side dish|pur[ée]e|gratin dauphinois|l[ée]gumes r[ôo]tis|roasted vegetables|frites|fries|po[êe]l[ée]e de|riz pilaf/i],
+ ["Plat",/plat|dinner|d[îi]ner|curry|risotto|lasagne|pasta|p[âa]tes|spaghetti|gnocchi|poulet|chicken|b[œo]euf|beef|saumon|salmon|quiche|tarte fine|pizza|burger|tacos|wok|bowl|one.?pot|gratin|parmentier|blanquette|bourguignon|tajine|chili/i]
+];
+const OCC_RULES=[
+ ["Healthy",/healthy|l[ée]ger|light\b|sain|[ée]quilibr[ée]|protein|prot[ée]in|low.?carb|vegan|végétarien/i],
+ ["Enfants",/enfant|kids?\b|kid.?friendly|famille|family/i],
+ ["Fête",/f[êe]te|anniversaire|birthday|no[ëe]l|christmas|nouvel an|p[âa]ques|easter|halloween|party|r[ée]veillon/i],
+ ["Invités",/invit[ée]s|recevoir|dinner party|d[îi]ner entre amis|entre amis|pour épater|wow/i],
+ ["Pique-nique",/pique.?nique|picnic|lunch ?box|à emporter|sandwich|wrap/i],
+ ["Batch cooking",/batch|meal prep|pr[ée]parer à l'avance|se conserve|congeler|freezer/i],
+ ["Week-end",/week.?end|dimanche|sunday|brunch/i],
+ ["Semaine",/rapide|express|quick|easy|facile|en \d+ ?min|weeknight|semaine|15 ?min|20 ?min/i]
+];
+function parseQty(s){
+  if(!s)return NaN;s=s.trim();const U={"½":.5,"¼":.25,"¾":.75,"⅓":1/3,"⅔":2/3,"⅛":.125};
+  let m=s.match(/^(\d+)\s*([½¼¾⅓⅔⅛])$/);if(m)return+m[1]+U[m[2]];
+  if(U[s]!=null)return U[s];
+  m=s.match(/^(\d+)\s+(\d+)\/(\d+)$/);if(m)return+m[1]+m[2]/m[3];
+  m=s.match(/^(\d+)\/(\d+)$/);if(m)return m[1]/m[2];
+  return parseFloat(s.replace(",","."));
 }
-async function copyText(txt,fallbackEl){
-  try{await navigator.clipboard.writeText(txt);return true}catch(e){if(fallbackEl){fallbackEl.hidden=false;fallbackEl.value=txt;fallbackEl.focus();fallbackEl.select()}return false}
+function roundNice(g){if(g<10)return Math.round(g);if(g<100)return Math.round(g/5)*5;if(g<1000)return Math.round(g/10)*10;return Math.round(g/50)*50}
+function fmtG(g){g=roundNice(g);return g>=1000?(g/1000).toString().replace(".",",")+" kg":g+" g"}
+function fmtMl(ml){ml=roundNice(ml);return ml>=1000?(ml/1000).toString().replace(".",",")+" l":ml+" ml"}
+const CUP_G=[[/almond flour|poudre d'amande/i,100],[/flour|farine/i,125],[/powdered sugar|icing sugar|confectioners/i,120],[/brown sugar/i,200],[/sugar|sucre/i,200],[/butter|beurre/i,225],[/oats|avoine/i,90],[/cocoa|cacao/i,85],[/chocolate chips|pépites/i,170],[/rice|riz/i,190],[/grated|shredded|parmesan|cheese|fromage/i,100],[/nuts|walnuts|pecans|almonds|noix|amandes/i,120],[/berries|blueberries|raspberries|fruits rouges/i,150],[/peanut butter|beurre de cacahu/i,250],[/honey|miel|maple|sirop/i,340]];
+const QTY="(\\d+\\s+\\d+\\/\\d+|\\d+\\/\\d+|\\d+\\s*[½¼¾⅓⅔⅛]|[½¼¾⅓⅔⅛]|\\d+(?:[.,]\\d+)?)";
+function convertUnits(text){
+  let t=text;
+  t=t.replace(/(\d{3})\s*°?\s*F\b/g,(m,f)=>{const c=Math.round((f-32)*5/9/5)*5;return `${c} °C (th. ${Math.round(c/30)})`});
+  t=t.replace(new RegExp(QTY+"\\s*(?:sticks?)\\s+(?:of\\s+)?(?:butter|beurre)","gi"),(m,q)=>fmtG(parseQty(q)*113)+" de beurre");
+  t=t.replace(new RegExp(QTY+"\\s*(?:cups?|c\\.)\\s+(?:of\\s+)?([^\\n,;]*)","gi"),(m,q,rest)=>{
+    const n=parseQty(q);if(isNaN(n))return m;const hit=CUP_G.find(([re])=>re.test(rest));
+    return (hit?fmtG(n*hit[1]):fmtMl(n*240))+" "+rest});
+  t=t.replace(new RegExp(QTY+"\\s*fl\\.?\\s*oz\\b","gi"),(m,q)=>fmtMl(parseQty(q)*30));
+  t=t.replace(new RegExp(QTY+"\\s*(?:oz|ounces?)\\b","gi"),(m,q)=>fmtG(parseQty(q)*28.35));
+  t=t.replace(new RegExp(QTY+"\\s*(?:lbs?|pounds?)\\b","gi"),(m,q)=>fmtG(parseQty(q)*454));
+  t=t.replace(new RegExp(QTY+"\\s*(?:tbsps?|tablespoons?|tbs|Tbsp)\\b","gi"),(m,q)=>q.trim()+" c. à soupe");
+  t=t.replace(new RegExp(QTY+"\\s*(?:tsps?|teaspoons?)\\b","gi"),(m,q)=>q.trim()+" c. à café");
+  t=t.replace(new RegExp(QTY+"\\s*(?:-\\s*)?(?:inch(?:es)?|in\\.|\")(?=[\\s,)x×]|$)","gi"),(m,q)=>Math.round(parseQty(q)*2.54)+" cm");
+  return t;
+}
+function durationOf(line){
+  const l=line.toLowerCase();let total=0,found=false;
+  const hm=l.match(/(\d+)\s*(?:h|heures?|hours?|hrs?)\s*(\d{1,2})?(?!\d)/);if(hm){total+=hm[1]*60+(+hm[2]||0);found=true}
+  const mm=l.replace(hm?hm[0]:"\u0000","").match(/(\d+)\s*(?:min|mins|minutes?|mn)\b/);if(mm){total+=+mm[1];found=true}
+  return found?total:null;
+}
+function guessMinutes(text){
+  const lines=text.split(/\n|\||,|;|\s-\s|\s–\s/);let tot=null,sum=0,any=false,first=null;
+  for(const ln of lines){const d=durationOf(ln);if(d==null)continue;if(first==null)first=d;
+    if(/total/i.test(ln))tot=d;
+    else if(/pr[ée]p|cuisson|cook|bake|four|oven|r[ée]alisation/i.test(ln)&&!/repos|rest|marin|frigo|fridge|chill/i.test(ln)){sum+=d;any=true}}
+  return tot??(any?sum:first);
+}
+function cleanLine(s){return s.replace(/\p{Extended_Pictographic}|️|‍/gu,"").replace(/#[\p{L}\p{N}_]+/gu,"").replace(/@[\w.]+/g,"").replace(/https?:\/\/\S+/g,"").replace(/\s+/g," ").replace(/^[\s\-–•*:!.]+|[\s\-–•*:,]+$/g,"").trim()}
+function titleFromUrl(url){
+  try{const u=new URL(url);if(/instagram|facebook|fb\.|pin\.it|pinterest|tiktok|youtu/.test(u.hostname))return"";
+    const segs=u.pathname.split("/").filter(Boolean).map(s=>decodeURIComponent(s).replace(/\.(html?|php|aspx)$/i,""));
+    const slug=segs.reverse().find(s=>/[a-zà-ÿ]{3,}.*[-_][a-zà-ÿ]{2,}/i.test(s));if(!slug)return"";
+    let w=slug.replace(/[-_]+/g," ").replace(/\b(recette|recettes|recipe|recipes|fiche|r)\b/gi,"").replace(/\b\d+\b/g,"").replace(/\s+/g," ").trim();
+    return w?w.charAt(0).toUpperCase()+w.slice(1):"";
+  }catch(e){return""}
+}
+function titleFromText(text){
+  for(const ln of text.split("\n")){const c=cleanLine(ln);if(c.replace(/[^\p{L}]/gu,"").length>=4&&!/^(ingr[ée]dients?|pour \d|for \d|serves)/i.test(c))return c.length>80?c.slice(0,77).replace(/\s\S*$/,"")+"…":c}
+  return"";
+}
+function analyse(url,raw,typed){
+  const text=raw||"",all=(url+" "+decodeURIComponent(url.replace(/[-_/]/g," "))+" "+text);
+  const title=typed||titleFromUrl(url)||titleFromText(text);
+  const hay=title+" "+all;
+  const mealRule=MEAL_RULES.find(([m,re])=>state.meals.includes(m)&&re.test(title))||MEAL_RULES.find(([m,re])=>state.meals.includes(m)&&re.test(hay));
+  const occasions=OCC_RULES.filter(([o,re])=>state.occ.includes(o)&&re.test(hay)).map(([o])=>o).slice(0,3);
+  const kw=new Set();
+  (text.match(/#[\p{L}\p{N}_]+/gu)||[]).map(h=>h.slice(1).toLowerCase()).filter(h=>h.length>2&&!STOP_TAGS.has(h)&&!/^\d+$/.test(h)).forEach(h=>kw.add(h));
+  const n=norm(hay);
+  INGREDIENTS.forEach(i=>{if(new RegExp("\\b"+norm(i)+"s?\\b").test(n))kw.add(i.replace("boeuf","bœuf").replace("oeuf","œuf"))});
+  Object.entries(EN_FR).forEach(([en,fr])=>{if(new RegExp("\\b"+en+"\\b","i").test(hay))kw.add(fr)});
+  DIET.forEach(([re,k])=>{if(re.test(hay))kw.add(k)});
+  const minutes=guessMinutes(text+"\n"+title);
+  const notes=text?convertUnits(text.split("\n").filter(l=>!/^\s*(#[\p{L}\p{N}_]+\s*)+$/u.test(l)).map(l=>l.replace(/\s*(#[\p{L}\p{N}_]+\s*){3,}$/u,"")).join("\n")).trim():"";
+  const kws=[...kw].filter((k,i,a)=>!a.some((o,j)=>j!==i&&o!==k&&o.includes(k)&&o.length>k.length));
+  return{title,meal:mealRule?mealRule[0]:"",occasions,minutes:minutes||0,keywords:kws.slice(0,8),notes};
 }
 
 /* ---------- ajout / modification ---------- */
@@ -374,21 +442,15 @@ function renderAdd(){
   const v=$("#vAdd"),existing=state.editing;
   const r=existing?JSON.parse(JSON.stringify(existing)):{title:"",url:"",meal:"",occasions:[],minutes:"",keywords:[],notes:"",photoData:null};
   const occSel=new Set(r.occasions||[]);let pendingPhoto;
-  v.innerHTML=`<div><h1 class="bigtitle">${existing?"Modifier":"Nouvelle recette"}</h1><p class="sub">${existing?esc(existing.title):"Collez un lien, Claude vous aide à la classer."}</p></div>
+  v.innerHTML=`<div><h1 class="bigtitle">${existing?"Modifier":"Nouvelle recette"}</h1><p class="sub">${existing?esc(existing.title):"Un lien suffit. Ajoutez un titre ou le texte du post si vous voulez, les champs se remplissent tout seuls."}</p></div>
     <div class="group"><span class="glabel">Source</span><div class="card">
       <label class="f">Lien de la recette<input id="fUrl" type="url" inputmode="url" placeholder="https://www.instagram.com/p/…" value="${esc(r.url)}"></label>
+      <label class="f">Titre <span class="hint">facultatif</span><input id="fTitle" type="text" value="${esc(r.title)}" placeholder="Tarte fine aux courgettes"></label>
       <label class="f">Texte du post <span class="hint">facultatif, utile pour Instagram et Facebook</span><textarea id="fRaw" placeholder="Collez la légende du post ou la liste d'ingrédients."></textarea></label>
+      <span class="aistatus" id="autoStatus">Le repas, la durée, les occasions, les mots-clés et les notes sont remplis à partir du lien, du titre et du texte. Les mesures en cups, oz, lb et °F sont converties.</span>
+      ${existing?"":'<button class="btn primary" id="quickSave" type="button">Enregistrer maintenant</button><span class="hint">Vous pourrez compléter la recette plus tard avec « Modifier ».</span>'}
     </div></div>
-    <div class="group"><span class="glabel">Remplir avec Claude</span><div class="card">
-      <ol class="steps"><li>Touchez « Copier la demande ».</li><li>Ouvrez Claude, collez et envoyez.</li><li>Copiez la réponse de Claude, revenez ici et collez-la ci-dessous.</li></ol>
-      <div class="actions"><button class="btn ai" id="aiCopy" type="button">Copier la demande</button><a class="btn" href="https://claude.ai/new" target="_blank" rel="noopener">Ouvrir Claude</a></div>
-      <textarea id="aiFallback" class="fallback" hidden readonly aria-label="Demande à copier"></textarea>
-      <label class="f">Réponse de Claude<textarea id="aiAnswer" placeholder="Collez ici la réponse de Claude."></textarea></label>
-      <button class="btn primary" id="aiApply" type="button">Appliquer la réponse</button>
-      <span class="aistatus" id="aiStatus"></span>
-    </div></div>
-    <div class="group"><span class="glabel">Classement</span><div class="card">
-      <label class="f">Titre<input id="fTitle" type="text" value="${esc(r.title)}" placeholder="Tarte fine aux courgettes"></label>
+    <div class="group"><span class="glabel">Classement <span class="hint" style="text-transform:none;letter-spacing:0">facultatif</span></span><div class="card">
       <div class="row2"><label class="f">Repas<select id="fMealSel"><option value="">Choisir…</option>${state.meals.map(m=>`<option ${m===r.meal?"selected":""}>${esc(m)}</option>`).join("")}</select></label>
       <label class="f">Durée (min)<input id="fMin" type="number" inputmode="numeric" min="0" step="5" value="${esc(r.minutes)}" placeholder="30"></label></div>
       <div class="f" style="display:grid;gap:6px"><span>Occasions</span><div class="chips" id="fOccChips"></div></div>
@@ -407,28 +469,34 @@ function renderAdd(){
   v.querySelector("#rmPhoto")?.addEventListener("click",e=>{pendingPhoto=null;v.querySelector("#photoPrev").hidden=true;e.target.remove()});
   v.querySelector("#fRaw").addEventListener("paste",e=>{const t=(e.clipboardData||{}).getData?.("text")||"";const m=t.match(/https?:\/\/\S+/);const u=v.querySelector("#fUrl");if(m&&!u.value)u.value=m[0]});
   v.querySelector("#fPhoto").addEventListener("change",async e=>{const f=e.target.files&&e.target.files[0];if(!f)return;try{pendingPhoto=await shrink(f);const p=v.querySelector("#photoPrev");p.src=pendingPhoto;p.hidden=false}catch(err){toast("Image illisible, essayez une autre photo.")}});
-  v.querySelector("#aiCopy").onclick=async()=>{
-    const url=v.querySelector("#fUrl").value.trim(),raw=v.querySelector("#fRaw").value.trim(),st=v.querySelector("#aiStatus");
-    if(!url&&!raw){st.textContent="Collez d'abord un lien ou le texte du post.";return}
-    const ok=await copyText(buildPrompt(url,raw),v.querySelector("#aiFallback"));
-    st.textContent=ok?"Demande copiée. Ouvrez Claude et collez-la.":"Copie automatique impossible : sélectionnez le texte ci-dessus et copiez-le.";
+  // champs modifiés à la main : on ne les écrase plus
+  const touched=new Set();
+  const F={title:"#fTitle",meal:"#fMealSel",minutes:"#fMin",keywords:"#fKw",notes:"#fNotes"};
+  Object.entries(F).forEach(([k,sel])=>{const el=v.querySelector(sel);["input","change"].forEach(ev=>el.addEventListener(ev,e=>{if(e.isTrusted)touched.add(k)}))});
+  if(existing)Object.keys(F).forEach(k=>touched.add(k)),touched.add("occasions");
+  v.querySelector("#fOccChips").addEventListener("click",()=>touched.add("occasions"));
+  let aT;
+  const autofill=()=>{
+    const url=v.querySelector("#fUrl").value.trim(),raw=v.querySelector("#fRaw").value;
+    const typed=touched.has("title")?v.querySelector("#fTitle").value.trim():"";
+    if(!url&&!raw.trim()&&!typed)return;
+    const out=analyse(url,raw,typed),st=v.querySelector("#autoStatus");
+    if(!touched.has("title")&&out.title)v.querySelector("#fTitle").value=out.title;
+    if(!touched.has("meal")&&out.meal)v.querySelector("#fMealSel").value=out.meal;
+    if(!touched.has("minutes")&&out.minutes)v.querySelector("#fMin").value=out.minutes;
+    if(!touched.has("keywords")&&out.keywords.length)v.querySelector("#fKw").value=out.keywords.join(", ");
+    if(!touched.has("notes")&&out.notes)v.querySelector("#fNotes").value=out.notes;
+    if(!touched.has("occasions")&&out.occasions.length){occSel.clear();out.occasions.forEach(o=>occSel.add(o));paintOcc()}
+    st.textContent="Champs remplis automatiquement. Vérifiez-les avant d'enregistrer.";
   };
-  v.querySelector("#aiApply").onclick=()=>{
-    const st=v.querySelector("#aiStatus");let out;
-    try{out=parseAI(v.querySelector("#aiAnswer").value)}catch(e){st.textContent="Réponse illisible. Copiez toute la réponse de Claude, bloc de code compris.";return}
-    if(out.title)v.querySelector("#fTitle").value=String(out.title);
-    if(out.meal&&state.meals.includes(out.meal))v.querySelector("#fMealSel").value=out.meal;
-    if(Number(out.minutes)>0)v.querySelector("#fMin").value=Math.round(Number(out.minutes));
-    if(Array.isArray(out.occasions)){occSel.clear();out.occasions.filter(o=>state.occ.includes(o)).forEach(o=>occSel.add(o));paintOcc()}
-    if(Array.isArray(out.keywords))v.querySelector("#fKw").value=out.keywords.map(String).join(", ");
-    const n=v.querySelector("#fNotes");if(out.notes&&!n.value.trim())n.value=String(out.notes);
-    st.textContent="Champs remplis. Vérifiez et corrigez si besoin, puis enregistrez.";
-  };
+  ["input","paste"].forEach(ev=>{v.querySelector("#fUrl").addEventListener(ev,()=>{clearTimeout(aT);aT=setTimeout(autofill,250)});v.querySelector("#fRaw").addEventListener(ev,()=>{clearTimeout(aT);aT=setTimeout(autofill,250)})});
+  v.querySelector("#fTitle").addEventListener("input",()=>{clearTimeout(aT);aT=setTimeout(autofill,400)});
+  v.querySelector("#quickSave")?.addEventListener("click",()=>v.querySelector("#save").click());
   v.querySelector("#save").onclick=async()=>{
     const btn=v.querySelector("#save"),url=v.querySelector("#fUrl").value.trim(),title=v.querySelector("#fTitle").value.trim();
-    if(!title&&!url){toast("Ajoutez au moins un titre ou un lien.");return}
+    if(!title&&!url){toast("Collez au moins un lien ou écrivez un titre.");return}
     btn.disabled=true;
-    const body={id:existing?existing.id:uid(),title:title||sourceOf(url)||"Sans titre",url,meal:v.querySelector("#fMealSel").value,occasions:[...occSel],
+    const body={id:existing?existing.id:uid(),title:title||fallbackTitle(url),url,meal:v.querySelector("#fMealSel").value,occasions:[...occSel],
       minutes:Math.max(0,Math.round(Number(v.querySelector("#fMin").value)||0)),
       keywords:v.querySelector("#fKw").value.split(",").map(s=>s.trim().toLowerCase()).filter(Boolean),
       notes:v.querySelector("#fNotes").value.trim(),photoData:pendingPhoto===undefined?(r.photoData||null):pendingPhoto,
@@ -436,6 +504,12 @@ function renderAdd(){
     try{await saveRecipe(body);state.editing=null;toast(existing?"Recette mise à jour":"Recette ajoutée");go("home")}
     catch(e){btn.disabled=false;toast("Enregistrement impossible. L'espace de stockage est peut-être plein.")}
   };
+}
+function fallbackTitle(url){
+  const h=sourceOf(url);
+  const name=/instagram/.test(h)?"Instagram":/facebook|fb\./.test(h)?"Facebook":/pinterest|pin\.it/.test(h)?"Pinterest":/tiktok/.test(h)?"TikTok":/youtu/.test(h)?"YouTube":h;
+  const d=new Date().toLocaleDateString("fr-FR",{day:"numeric",month:"long"});
+  return name?`Recette ${name} du ${d}`:"Sans titre";
 }
 function shrink(file){return new Promise((res,rej)=>{const img=new Image();img.onload=()=>{const s=Math.min(1,900/Math.max(img.width,img.height));const c=document.createElement("canvas");c.width=Math.round(img.width*s);c.height=Math.round(img.height*s);c.getContext("2d").drawImage(img,0,0,c.width,c.height);res(c.toDataURL("image/jpeg",.8))};img.onerror=rej;img.src=URL.createObjectURL(file)})}
 
